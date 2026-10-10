@@ -1,0 +1,13 @@
+# macOS build artifacts
+.build/
+*.app
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Logs and user test artifacts
+*.log
+scratch/
