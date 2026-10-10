@@ -310,7 +310,17 @@ final class OllamaAgent: ObservableObject {
                         ])
                         messages.append([
                             "role": "user",
-                            "content": "Here are the live web search results for the user's question:\n\n\(summary)\n\nPlease provide a clear, helpful, and concise answer summarizing the findings for the user."
+                            "content": """
+                            Here are the live web search results for the user's question:
+
+                            \(summary)
+
+                            CRITICAL INSTRUCTIONS:
+                            1. Strictly rely ONLY on facts, scores, dates, and numbers explicitly present in the search results above.
+                            2. Do NOT invent, assume, or hallucinate specific scores, statistics, outcomes, or details that are not directly stated in the search snippets.
+                            3. If the search results show scheduled match links or articles but do not contain the specific score or answer, state clearly that the score is not in the search preview and provide the relevant link(s).
+                            4. Keep your answer clear, helpful, and concise.
+                            """
                         ])
                         
                         let followUpPayload: [String: Any] = [
