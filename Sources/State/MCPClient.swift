@@ -22,19 +22,53 @@ final class MCPClient: ObservableObject {
         stopServer()
         
         let fileManager = FileManager.default
-        var scriptPath = Bundle.main.path(forResource: "mcp_scheduler_server", ofType: "py") ?? "/Users/donthireddy/code/pa/EchoBuddy/Resources/mcp_scheduler_server.py"
-        if !fileManager.fileExists(atPath: scriptPath) {
-            scriptPath = "/Users/donthireddy/code/pa/EchoBuddy/Resources/mcp_scheduler_server.py"
+        var scriptPath: String?
+        
+        // 1. Check in the app bundle resources (standard when packaged into Shodha.app)
+        if let bundleRes = Bundle.main.path(forResource: "mcp_scheduler_server", ofType: "py"),
+           fileManager.fileExists(atPath: bundleRes) {
+            scriptPath = bundleRes
         }
         
-        guard fileManager.fileExists(atPath: scriptPath) else {
-            print("[MCPClient] MCP server script not found at: \(scriptPath)")
+        // 2. Check relative to current working directory or executable directory
+        if scriptPath == nil {
+            let relativePaths = [
+                "Resources/mcp_scheduler_server.py",
+                "../Resources/mcp_scheduler_server.py",
+                "../../Resources/mcp_scheduler_server.py"
+            ]
+            
+            let cwd = fileManager.currentDirectoryPath
+            for rel in relativePaths {
+                let candidate = (cwd as NSString).appendingPathComponent(rel)
+                if fileManager.fileExists(atPath: candidate) {
+                    scriptPath = candidate
+                    break
+                }
+            }
+            
+            // 3. Check relative to binary executable path (e.g. inside Shodha.app/Contents/MacOS)
+            if scriptPath == nil {
+                let execURL = Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0])
+                let execDir = execURL.deletingLastPathComponent().path
+                for rel in relativePaths {
+                    let candidate = (execDir as NSString).appendingPathComponent(rel)
+                    if fileManager.fileExists(atPath: candidate) {
+                        scriptPath = candidate
+                        break
+                    }
+                }
+            }
+        }
+        
+        guard let validScriptPath = scriptPath, fileManager.fileExists(atPath: validScriptPath) else {
+            print("[MCPClient] MCP server script not found in bundle or relative paths.")
             return
         }
         
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
-        proc.arguments = [scriptPath]
+        proc.arguments = [validScriptPath]
         
         let inPipe = Pipe()
         let outPipe = Pipe()

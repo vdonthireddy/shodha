@@ -159,16 +159,24 @@ final class OllamaAgent: ObservableObject {
         let systemPrompt = """
         Current date and time: \(nowHuman) [ISO: \(nowISO)].
         You are Shodha, a smart desktop companion with access to MCP tools.
-        When the user asks to be reminded about something (e.g., at a specific time or in a duration):
-        - You MUST call the 'schedule_reminder' tool.
-        - Calculate the exact date/time in 'target_time' (ISO format YYYY-MM-DDTHH:MM:SS or relative e.g. 'in 15 minutes').
-        - Pass the user's task in 'reminder'.
-        - If the user asks what reminders they have, call 'list_reminders'.
-        - If the user asks to cancel a reminder, call 'cancel_reminder'.
+        
+        Available tools:
+        1. 'search_internet':
+           - Call this whenever the user asks for latest news, current facts, weather, documentation, sports, stock prices, or questions requiring real-time/web information.
+           - Pass search keywords in 'query'.
+        2. 'schedule_reminder':
+           - Call this when the user asks to be reminded about something (at a specific time or in a duration).
+           - Calculate the exact date/time in 'target_time' (ISO format YYYY-MM-DDTHH:MM:SS or relative e.g. 'in 15 minutes').
+           - Pass the task in 'reminder'.
+        3. 'list_reminders':
+           - Call this when the user asks what reminders they have.
+        4. 'cancel_reminder':
+           - Call this when the user asks to cancel a reminder.
+        
         Keep your responses clear and concise.
         """
         
-        let messages: [[String: Any]] = [
+        var messages: [[String: Any]] = [
             ["role": "system", "content": systemPrompt],
             ["role": "user", "content": cleanPrompt]
         ]
@@ -201,6 +209,11 @@ final class OllamaAgent: ObservableObject {
                         "function": ["name": "schedule_reminder"]
                     ]
                 }
+            } else if lower.starts(with: "search ") || lower.contains("search for") || lower.contains("search internet") || lower.contains("search the web") || lower.contains("google ") || lower.contains("latest news") || lower.contains("who won") || lower.contains("current weather") || lower.contains("what is happening") {
+                payload["tool_choice"] = [
+                    "type": "function",
+                    "function": ["name": "search_internet"]
+                ]
             }
         }
         
@@ -234,30 +247,103 @@ final class OllamaAgent: ObservableObject {
                 // Check if the LLM called an MCP Tool!
                 if let toolCalls = choice.message.tool_calls, !toolCalls.isEmpty {
                     var toolOutputTexts: [String] = []
+                    var isSearchTool = false
+                    var searchSummary: String? = nil
                     
                     for call in toolCalls {
                         let fnName = call.function.name
                         let argsJson = call.function.arguments
                         let argsData = argsJson.data(using: .utf8) ?? Data()
-                        let argsDict = (try? JSONSerialization.jsonObject(with: argsData)) as? [String: Any] ?? [:]
+                        var argsDict = (try? JSONSerialization.jsonObject(with: argsData)) as? [String: Any] ?? [:]
+                        
+                        if fnName == "search_internet" && argsDict["query"] == nil {
+                            // Extract query from user prompt if model left query empty
+                            var q = cleanPrompt
+                            for prefix in ["search for", "search internet for", "search the web for", "search web for", "search"] {
+                                if let range = q.range(of: prefix, options: .caseInsensitive) {
+                                    q = String(q[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+                                    break
+                                }
+                            }
+                            argsDict["query"] = q.isEmpty ? cleanPrompt : q
+                        }
                         
                         let toolResult = await mcpClient.callTool(name: fnName, arguments: argsDict)
                         
                         // Parse friendly message if JSON returned
                         if let resData = toolResult.data(using: .utf8),
-                           let resObj = (try? JSONSerialization.jsonObject(with: resData)) as? [String: Any],
-                           let msg = resObj["message"] as? String {
-                            toolOutputTexts.append(msg)
+                           let resObj = (try? JSONSerialization.jsonObject(with: resData)) as? [String: Any] {
+                            if fnName == "search_internet" {
+                                isSearchTool = true
+                                if let summary = resObj["summary"] as? String, !summary.isEmpty {
+                                    searchSummary = summary
+                                    toolOutputTexts.append(summary)
+                                } else if let msg = resObj["message"] as? String {
+                                    toolOutputTexts.append(msg)
+                                } else {
+                                    toolOutputTexts.append(toolResult)
+                                }
+                            } else if let msg = resObj["message"] as? String {
+                                toolOutputTexts.append(msg)
+                            } else {
+                                toolOutputTexts.append(toolResult)
+                            }
                         } else {
                             toolOutputTexts.append(toolResult)
                         }
                     }
                     
-                    isGenerating = false
-                    self.onReminderScheduled?()
+                    if !isSearchTool {
+                        self.onReminderScheduled?()
+                        isGenerating = false
+                        let finalAnswer = toolOutputTexts.joined(separator: "\n")
+                        self.lastResponse = "⏰ " + finalAnswer
+                        self.errorMessage = nil
+                        return self.lastResponse
+                    }
                     
-                    let finalAnswer = toolOutputTexts.joined(separator: "\n")
-                    self.lastResponse = "⏰ " + finalAnswer
+                    // For search_internet, ask the model to formulate a natural answer using the search results!
+                    if let summary = searchSummary {
+                        messages.append([
+                            "role": "assistant",
+                            "content": "I will search the internet for the latest information."
+                        ])
+                        messages.append([
+                            "role": "user",
+                            "content": "Here are the live web search results for the user's question:\n\n\(summary)\n\nPlease provide a clear, helpful, and concise answer summarizing the findings for the user."
+                        ])
+                        
+                        let followUpPayload: [String: Any] = [
+                            "model": selectedModel,
+                            "messages": messages
+                        ]
+                        
+                        var followUpReq = URLRequest(url: url)
+                        followUpReq.httpMethod = "POST"
+                        followUpReq.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                        if !apiKey.isEmpty {
+                            followUpReq.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+                        }
+                        followUpReq.timeoutInterval = 60.0
+                        
+                        if let followUpBody = try? JSONSerialization.data(withJSONObject: followUpPayload) {
+                            followUpReq.httpBody = followUpBody
+                            if let (fData, fResp) = try? await URLSession.shared.data(for: followUpReq),
+                               let fHttp = fResp as? HTTPURLResponse, fHttp.statusCode == 200,
+                               let fDecoded = try? JSONDecoder().decode(OpenAIChatResponse.self, from: fData),
+                               let fChoice = fDecoded.choices.first,
+                               let fContent = fChoice.message.content, !fContent.isEmpty {
+                                isGenerating = false
+                                self.lastResponse = "🌐 " + fContent.trimmingCharacters(in: .whitespacesAndNewlines)
+                                self.errorMessage = nil
+                                return self.lastResponse
+                            }
+                        }
+                    }
+                    
+                    isGenerating = false
+                    let finalAnswer = toolOutputTexts.joined(separator: "\n\n")
+                    self.lastResponse = "🌐 Search Results:\n\n" + finalAnswer
                     self.errorMessage = nil
                     return self.lastResponse
                 } else if let content = choice.message.content {
@@ -270,6 +356,24 @@ final class OllamaAgent: ObservableObject {
                             isGenerating = false
                             self.onReminderScheduled?()
                             self.lastResponse = "⏰ " + scheduled
+                            self.errorMessage = nil
+                            return self.lastResponse
+                        }
+                    } else if lower.starts(with: "search ") || lower.contains("search internet") || lower.contains("search the web") || lower.contains("search for") {
+                        var q = cleanPrompt
+                        for prefix in ["search for", "search internet for", "search the web for", "search web for", "search"] {
+                            if let range = q.range(of: prefix, options: .caseInsensitive) {
+                                q = String(q[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+                                break
+                            }
+                        }
+                        let queryParam = q.isEmpty ? cleanPrompt : q
+                        let toolResult = await mcpClient.callTool(name: "search_internet", arguments: ["query": queryParam])
+                        if let resData = toolResult.data(using: .utf8),
+                           let resObj = (try? JSONSerialization.jsonObject(with: resData)) as? [String: Any],
+                           let summary = resObj["summary"] as? String, !summary.isEmpty {
+                            isGenerating = false
+                            self.lastResponse = "🌐 Live Web Results for \"\(queryParam)\":\n\n" + summary
                             self.errorMessage = nil
                             return self.lastResponse
                         }

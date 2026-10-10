@@ -4,6 +4,9 @@ import json
 import os
 import uuid
 import re
+import html
+import urllib.request
+import urllib.parse
 from datetime import datetime, timedelta
 
 STORAGE_DIR = os.path.expanduser("~/Library/Application Support/Shodha")
@@ -198,7 +201,122 @@ def handle_cancel_reminder(args):
     save_reminders(new_list)
     return {"status": "success" if cancelled else "not_found", "cancelled": cancelled}
 
+def search_duckduckgo(query, max_results=5):
+    url = "https://html.duckduckgo.com/html/?" + urllib.parse.urlencode({"q": query})
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        }
+    )
+    with urllib.request.urlopen(req, timeout=8) as resp:
+        page = resp.read().decode("utf-8", errors="ignore")
+
+    clean = lambda s: re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', '', html.unescape(s))).strip()
+    result_blocks = re.findall(r'<div[^>]*class=[\'"][^\'"]*result\s+results_links[^\'"]*[\'"][^>]*>(.*?)</div>\s*</div>\s*</div>', page, re.DOTALL)
+    results = []
+
+    for block in result_blocks:
+        title_match = re.search(r'<a[^>]*class=[\'"][^\'"]*result__a[^\'"]*[\'"][^>]*href=[\'"]([^\'"]+)[\'"][^>]*>(.*?)</a>', block, re.DOTALL)
+        if not title_match:
+            continue
+        href = title_match.group(1)
+        title = clean(title_match.group(2))
+
+        if "uddg=" in href:
+            uddg_match = re.search(r'uddg=([^&]+)', href)
+            if uddg_match:
+                href = urllib.parse.unquote(uddg_match.group(1))
+        elif href.startswith("//"):
+            href = "https:" + href
+
+        snippet_match = re.search(r'<a[^>]*class=[\'"][^\'"]*result__snippet[^\'"]*[\'"][^>]*>(.*?)</a>', block, re.DOTALL)
+        snippet = clean(snippet_match.group(1)) if snippet_match else ""
+
+        results.append({
+            "title": title,
+            "url": href,
+            "snippet": snippet
+        })
+        if len(results) >= max_results:
+            break
+
+    return results
+
+def search_wikipedia(query, max_results=3):
+    url = f"https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={urllib.parse.quote(query)}&format=json&utf8=1&srlimit={max_results}"
+    req = urllib.request.Request(url, headers={"User-Agent": "ShodhaDesktopCompanion/1.0"})
+    clean = lambda s: re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', '', html.unescape(s))).strip()
+    with urllib.request.urlopen(req, timeout=5) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+        results = []
+        for item in data.get("query", {}).get("search", []):
+            results.append({
+                "title": item.get("title", ""),
+                "snippet": clean(item.get("snippet", "")),
+                "url": f"https://en.wikipedia.org/wiki/{urllib.parse.quote(item.get('title', ''))}"
+            })
+        return results
+
+def handle_search_internet(args):
+    query = args.get("query", "").strip()
+    if not query:
+        return {"status": "error", "message": "No search query provided."}
+    
+    max_res = int(args.get("max_results", 5))
+    results = []
+    
+    try:
+        results = search_duckduckgo(query, max_results=max_res)
+    except Exception:
+        pass
+        
+    if not results:
+        try:
+            results = search_wikipedia(query, max_results=max_res)
+        except Exception:
+            pass
+            
+    if not results:
+        return {
+            "status": "no_results",
+            "query": query,
+            "message": f"No web search results found for '{query}'.",
+            "results": []
+        }
+        
+    summary_lines = []
+    for i, r in enumerate(results, 1):
+        summary_lines.append(f"{i}. [{r['title']}]({r['url']})\n   {r['snippet']}")
+        
+    return {
+        "status": "success",
+        "query": query,
+        "count": len(results),
+        "results": results,
+        "message": f"Found {len(results)} search results for '{query}'.",
+        "summary": "\n\n".join(summary_lines)
+    }
+
 TOOLS = [
+    {
+        "name": "search_internet",
+        "description": "Search the live internet for up-to-date information, current news, facts, documentation, or when the user asks questions that require live web information.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The search query keywords to search on the web (e.g. 'latest Apple news', 'weather San Francisco', 'Python 3.13 release date')."
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Maximum number of search results to retrieve (default is 5)."
+                }
+            },
+            "required": ["query"]
+        }
+    },
     {
         "name": "schedule_reminder",
         "description": "Schedule a reminder for a specific date and time. Use this whenever the user asks to be reminded about something at a certain date, time, or in a duration.",
@@ -292,7 +410,9 @@ def main():
         elif method == "tools/call":
             tool_name = params.get("name")
             args = params.get("arguments", {})
-            if tool_name == "schedule_reminder":
+            if tool_name == "search_internet":
+                output = handle_search_internet(args)
+            elif tool_name == "schedule_reminder":
                 output = handle_schedule_reminder(args)
             elif tool_name == "list_reminders":
                 output = handle_list_reminders()

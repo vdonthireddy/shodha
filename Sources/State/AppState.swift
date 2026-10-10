@@ -255,9 +255,24 @@ final class AppState: ObservableObject {
         }
         
         // Default mascot avatar
-        var defaultMascotPath = Bundle.main.path(forResource: "default_mascot", ofType: "png")
-        if defaultMascotPath == nil || !FileManager.default.fileExists(atPath: defaultMascotPath!) {
-            defaultMascotPath = "/Users/donthireddy/code/pa/EchoBuddy/Resources/default_mascot.png"
+        var defaultMascotPath: String?
+        if let bundlePath = Bundle.main.path(forResource: "default_mascot", ofType: "png"),
+           FileManager.default.fileExists(atPath: bundlePath) {
+            defaultMascotPath = bundlePath
+        } else {
+            let relativePaths = [
+                "Resources/default_mascot.png",
+                "../Resources/default_mascot.png",
+                "../../Resources/default_mascot.png"
+            ]
+            let cwd = FileManager.default.currentDirectoryPath
+            for rel in relativePaths {
+                let candidate = (cwd as NSString).appendingPathComponent(rel)
+                if FileManager.default.fileExists(atPath: candidate) {
+                    defaultMascotPath = candidate
+                    break
+                }
+            }
         }
         if let path = defaultMascotPath, FileManager.default.fileExists(atPath: path) {
             let sourceURL = URL(fileURLWithPath: path)
