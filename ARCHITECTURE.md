@@ -109,8 +109,9 @@ graph TD
   - Implements the Model Context Protocol (MCP) handshake: `initialize`, `notifications/initialized`, and `tools/list`.
   - Executes tool calls via JSON-RPC 2.0 `tools/call`.
 - **`mcp_scheduler_server.py`**:
-  - Standalone MCP server exposing `schedule_reminder`, `list_reminders`, and `cancel_reminder`.
-  - Evaluates relative and absolute time phrases (e.g. "in 15 minutes", "tomorrow at 9am") and atomic JSON persistence to `reminders.json`.
+  - Standalone MCP server exposing `search_internet`, `schedule_reminder`, `list_reminders`, and `cancel_reminder`.
+  - Evaluates relative and absolute time phrases (e.g. "in 15 minutes", "tomorrow at 9am", "at 2 pm today") and atomic JSON persistence to `reminders.json`.
+  - Implements lightweight web search and content reading without external Python dependencies.
 
 ---
 
@@ -126,14 +127,37 @@ graph TD
             | ---- notifications/initialized ----------> |
             |                                            |
             | ---------- tools/list (id: 2) -----------> |
-            | <--------- tools list [schedule...] ------ |
+            | <--------- tools list [schedule, search] - |
             |                                            |
-            | -- tools/call "schedule_reminder" (id: 3)->|
+            | -- tools/call "search_internet" (id: 3) -->|
+            |                                            | (scrapes DDG + fetches page)
+            | <--------- result: {results, summary} ---- |
+            |                                            |
+            | -- tools/call "schedule_reminder" (id: 4)->|
             |                                            | (writes reminders.json)
             | <--------- result: {scheduled: true} ----- |
 ```
 
-### 3.2 Notification Delivery Architecture
+### 3.2 Internet Search Architecture & Design Reasoning
+
+Shodha incorporates a real-time internet search tool (`search_internet`) behind the MCP server.
+
+#### Architectural Reasoning & Decision Log:
+1. **Why Not Third-Party Libraries (`ddgs` / `duckduckgo_search` / `selenium` / `playwright`)?**
+   - **Zero Dependency Footprint:** macOS provides `/usr/bin/python3` out-of-the-box, but macOS Monterey/Ventura/Sonoma/Sequoia enforces PEP 668 ("externally-managed-environment"), which prohibits running global `pip install` without virtual environments or Homebrew. Requiring `pip install duckduckgo_search` would break the one-step `./install.sh` installation guarantee for end users.
+   - **Package Fragility:** Scraping wrapper packages frequently break when DuckDuckGo modifies its undocumented internal JS APIs, causing silent failures until users manually update pip packages.
+   - **Binary Portability:** Shodha's MCP server utilizes purely Python standard libraries (`urllib.request`, `re`, `html`, `json`), requiring zero setup or virtual environments.
+
+2. **Why Two-Stage Retrieval (Search + Fast Page Reader)?**
+   - Search engines only provide short 1-to-2 sentence SERP preview snippets. For granular queries (e.g., live cricket scores, election results, product specs), the preview snippet often states *"Click here for full live scorecard"* without containing the actual score.
+   - Without the underlying webpage data, local LLMs are prone to hallucinating plausible-sounding numbers.
+   - **Solution:** The MCP server retrieves the search results and immediately enriches the top URLs by stripping non-content tags (`<script>`, `<style>`, `<nav>`, `<header>`) and fetching plain text excerpts. This provides the LLM with genuine grounded facts to summarize.
+
+3. **Fallback Resiliency:**
+   - Primary: DuckDuckGo HTML endpoint (`https://html.duckduckgo.com/html/`).
+   - Secondary: Wikipedia Search API (`https://en.wikipedia.org/w/api.php`) for encyclopedia-level entity verification when search endpoints are temporarily throttled.
+
+### 3.3 Notification Delivery Architecture
 ```
   [ mcp_scheduler_server ] 
              | writes target_epoch

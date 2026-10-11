@@ -272,6 +272,30 @@ def search_wikipedia(query, max_results=3):
             })
         return results
 
+def fetch_page_content(url, max_chars=1200):
+    if not url or not url.startswith(("http://", "https://")):
+        return ""
+    try:
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+            }
+        )
+        with urllib.request.urlopen(req, timeout=3.5) as resp:
+            content_type = resp.headers.get("Content-Type", "")
+            if "text/html" not in content_type and "text/plain" not in content_type:
+                return ""
+            raw = resp.read().decode("utf-8", errors="ignore")
+            # Strip non-content tags
+            raw = re.sub(r"<(script|style|svg|noscript|header|footer|nav)[^>]*>.*?</\1>", " ", raw, flags=re.DOTALL | re.IGNORECASE)
+            text = re.sub(r"<[^>]+>", " ", raw)
+            text = html.unescape(text)
+            text = re.sub(r"\s+", " ", text).strip()
+            return text[:max_chars]
+    except Exception:
+        return ""
+
 def handle_search_internet(args):
     query = args.get("query", "").strip()
     if not query:
@@ -299,9 +323,19 @@ def handle_search_internet(args):
             "results": []
         }
         
+    # Enrich the top 2 results with live page content for deeper factual grounding
+    for i in range(min(len(results), 2)):
+        page_url = results[i].get("url", "")
+        page_snippet = fetch_page_content(page_url, max_chars=1000)
+        if page_snippet:
+            results[i]["page_content"] = page_snippet
+
     summary_lines = []
     for i, r in enumerate(results, 1):
-        summary_lines.append(f"{i}. [{r['title']}]({r['url']})\n   {r['snippet']}")
+        line = f"{i}. [{r['title']}]({r['url']})\n   Summary: {r['snippet']}"
+        if "page_content" in r and r["page_content"]:
+            line += f"\n   Page excerpt: {r['page_content'][:600]}..."
+        summary_lines.append(line)
         
     return {
         "status": "success",
