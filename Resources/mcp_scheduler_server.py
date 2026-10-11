@@ -77,12 +77,21 @@ def parse_target_time(target_str, now=None):
                     pass
         return base_day.replace(hour=9, minute=0, second=0, microsecond=0)
 
-    # Try ISO
+    # Try ISO format
     try:
         clean_iso = target_str.replace("Z", "+00:00")
         return datetime.fromisoformat(clean_iso)
     except Exception:
         pass
+
+    # Normalize phrases: strip prepositions ('at', 'by', 'on') and qualifiers ('today', 'tonight')
+    is_today = bool(re.search(r'\b(today|tonight)\b', target_lower))
+    clean_target = re.sub(r'\b(today|tonight)\b', '', target_str, flags=re.IGNORECASE).strip()
+    clean_target = re.sub(r'^(at|on|by)\s+', '', clean_target, flags=re.IGNORECASE).strip()
+    clean_target = re.sub(r'\s+(today|tonight)$', '', clean_target, flags=re.IGNORECASE).strip()
+    clean_target = re.sub(r'\s+', ' ', clean_target).strip()
+
+    candidate_strings = [clean_target, target_str]
 
     formats = [
         "%Y-%m-%d %H:%M:%S",
@@ -108,16 +117,21 @@ def parse_target_time(target_str, now=None):
         "%H:%M",
         "%H:%M:%S"
     ]
-    for fmt in formats:
-        try:
-            dt = datetime.strptime(target_str, fmt)
-            if fmt in ["%I:%M %p", "%I:%M:%S %p", "%I %p", "%I:%M%p", "%I%p", "%H:%M", "%H:%M:%S"]:
-                dt = now.replace(hour=dt.hour, minute=dt.minute, second=dt.second, microsecond=0)
-                if dt < now:
-                    dt += timedelta(days=1)
-            return dt
-        except Exception:
+    time_only_formats = {"%I:%M %p", "%I:%M:%S %p", "%I %p", "%I:%M%p", "%I%p", "%H:%M", "%H:%M:%S"}
+
+    for cand in candidate_strings:
+        if not cand:
             continue
+        for fmt in formats:
+            try:
+                dt = datetime.strptime(cand, fmt)
+                if fmt in time_only_formats:
+                    dt = now.replace(hour=dt.hour, minute=dt.minute, second=dt.second, microsecond=0)
+                    if not is_today and dt < now:
+                        dt += timedelta(days=1)
+                return dt
+            except Exception:
+                continue
             
     return None
 
