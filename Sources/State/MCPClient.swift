@@ -17,8 +17,13 @@ private final class MCPTransport: @unchecked Sendable {
             isStopped = false
             readBuffer.removeAll(keepingCapacity: false)
 
+            guard let pythonPath = Self.resolvePythonExecutable() else {
+                print("[MCPClient] Python 3 not found. Install Xcode Command Line Tools or Homebrew Python 3.")
+                return false
+            }
+
             let proc = Process()
-            proc.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+            proc.executableURL = URL(fileURLWithPath: pythonPath)
             proc.arguments = [scriptPath]
 
             let inPipe = Pipe()
@@ -72,6 +77,33 @@ private final class MCPTransport: @unchecked Sendable {
         ioQueue.sync {
             process?.isRunning ?? false
         }
+    }
+
+    private static func resolvePythonExecutable() -> String? {
+        let fm = FileManager.default
+        let directCandidates = [
+            "/opt/homebrew/bin/python3",
+            "/usr/local/bin/python3",
+            "/Library/Frameworks/Python.framework/Versions/Current/bin/python3",
+            "/Library/Developer/CommandLineTools/usr/bin/python3",
+            "/Applications/Xcode.app/Contents/Developer/usr/bin/python3"
+        ]
+        for path in directCandidates where fm.isExecutableFile(atPath: path) {
+            return path
+        }
+        // Only fall back to /usr/bin/python3 shim if developer tools are configured (avoids OS install popup)
+        let check = Process()
+        check.executableURL = URL(fileURLWithPath: "/usr/bin/xcode-select")
+        check.arguments = ["-p"]
+        check.standardOutput = Pipe()
+        check.standardError = Pipe()
+        if (try? check.run()) != nil {
+            check.waitUntilExit()
+            if check.terminationStatus == 0 && fm.isExecutableFile(atPath: "/usr/bin/python3") {
+                return "/usr/bin/python3"
+            }
+        }
+        return nil
     }
 
     func sendNotification(_ jsonData: Data) {

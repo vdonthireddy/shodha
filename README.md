@@ -121,7 +121,19 @@ cd shodha
 ./install.sh
 ```
 
-The script will:
+### Build a Distributable `.dmg` (Universal Apple Silicon + Intel)
+To package a compressed `.dmg` installer you can share with other MacBooks:
+
+```bash
+./build_dmg.sh
+```
+
+This creates `dist/Shodha-1.0.0-universal.dmg` containing:
+- A Universal (`arm64` + `x86_64`) `Shodha.app` bundle
+- An `Applications` drag-and-drop symlink
+- `HOW_TO_INSTALL.txt` with first-launch Gatekeeper instructions
+
+The script (`./install.sh`) will:
 1. Compile all Swift sources with native optimizations.
 2. Package the app bundle with assets and the MCP server.
 3. Apply ad-hoc code signatures.

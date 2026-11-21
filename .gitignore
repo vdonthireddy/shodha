@@ -1,6 +1,8 @@
 # macOS build artifacts
 .build/
 *.app
+*.dmg
+dist/
 .DS_Store
 
 # Python
