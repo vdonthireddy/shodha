@@ -4,7 +4,7 @@ import AppKit
 struct AvatarView: View {
     @ObservedObject var appState: AppState
     var onToggleDialog: () -> Void
-    
+
     var body: some View {
         ZStack {
             // Animated Sound Ripple Waves when speaking
@@ -13,15 +13,20 @@ struct AvatarView: View {
                     .stroke(Color.cyan.opacity(appState.wavePhase == 1.0 ? 0.3 : 0.7), lineWidth: 2.5)
                     .frame(width: 66, height: 66)
                     .scaleEffect(appState.wavePhase == 1.0 ? 1.35 : 1.1)
+            } else if appState.agent.isGenerating {
+                Circle()
+                    .stroke(Color.purple.opacity(0.65), lineWidth: 2.0)
+                    .frame(width: 66, height: 66)
+                    .scaleEffect(1.12)
             }
-            
+
             // Outer shadow ring
             Circle()
                 .fill(Color.black.opacity(0.18))
                 .frame(width: 66, height: 66)
                 .blur(radius: 6)
                 .offset(y: 4)
-            
+
             // Avatar Body
             Group {
                 if let customImage = appState.activeAvatarImage {
@@ -62,7 +67,18 @@ struct AvatarView: View {
                 }
             }
             .scaleEffect(appState.isHovering ? 1.06 : (appState.isSpeaking ? 1.03 : 1.0))
-            
+
+            // Top-left active reminder count badge
+            if !appState.reminderManager.upcomingReminders.isEmpty {
+                Image(systemName: "alarm.fill")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundColor(.white)
+                    .padding(3.5)
+                    .background(Color.orange.opacity(0.9))
+                    .clipShape(Circle())
+                    .offset(x: -22, y: -22)
+            }
+
             // Speaking indicator badge or Mute badge
             if appState.isMuted {
                 Image(systemName: "speaker.slash.fill")
@@ -88,11 +104,11 @@ struct AvatarView: View {
             appState.isHovering = hovering
         }
         .contextMenu {
-            Button(appState.isDialogVisible ? "Hide Echo Box" : "Show Echo Box") {
+            Button(appState.isDialogVisible ? "Hide Shodha Chat" : "Show Shodha Chat") {
                 onToggleDialog()
             }
             Divider()
-            Button("🌟 Cute Buddy Mascot") {
+            Button("🌟 Cute Shodha Mascot") {
                 appState.selectAvatar(id: nil)
             }
             Button("📷 Add Photos from Mac...") {
@@ -105,7 +121,13 @@ struct AvatarView: View {
             Button(appState.isMuted ? "Unmute Voice" : "Mute Voice") {
                 appState.isMuted.toggle()
             }
+            Button(appState.autoSpeak ? "✓ Auto-Speak Responses" : "Auto-Speak Responses") {
+                appState.autoSpeak.toggle()
+            }
             Divider()
+            Button("Clear Chat History") {
+                appState.agent.clearChat()
+            }
             Button("Quit Shodha") {
                 NSApp.terminate(nil)
             }
